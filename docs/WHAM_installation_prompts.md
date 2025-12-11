@@ -1,3 +1,11 @@
+
+Clean up and reset for preparing reinstallation
+1.reset the project to origin/main remote repo on github
+2.reset the submodules to origin remote repo on github
+3.remove the conda env 'WHAM'
+
+
+Install WHAM
 1.check the versions of GPU driver and CUDA platform, 
 2.check the version of Ubuntu
 3.follow the installation guide in INSTALL.md
@@ -6,5 +14,8 @@
   -python 3.10, 
   -pytorch build(stable(2.9.1)+cu130) from https://download.pytorch.org/whl/cu130
   -cuda toolkit/nvcc 13.0
-6.resolve the errors in installing and install WHAM successfully
-7.for DPVO installation, refer to the file "DPVO_compatible_installation.md"
+
+6.for DPVO installation, refer to the file "DPVO_compatible_installation.md"
+7.for pytorch3d installation, refer to file "Pytorch3D_compatible_install"
+8.resolve the errors in installing and install WHAM successfully
+

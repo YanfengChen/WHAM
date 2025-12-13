@@ -1,0 +1,99 @@
+FROM nvidia/cuda:12.8.0-devel-ubuntu22.04
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    TORCH_CUDA_ARCH_LIST="12.0" \
+    MMCV_WITH_OPS=1 \
+    FORCE_CUDA=1
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    python3.10 \
+    python3.10-dev \
+    python3-pip \
+    git \
+    wget \
+    ffmpeg \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    build-essential \
+    ninja-build \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set python3.10 as default
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1 && \
+    update-alternatives --install /usr/bin/pip pip /usr/bin/pip3 1
+
+# Upgrade pip
+RUN pip install --upgrade pip setuptools wheel
+
+# Install PyTorch nightly with CUDA 12.8 support (includes sm_120 for RTX 5090)
+RUN pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+
+# Install compatible numpy and other base dependencies
+RUN pip install numpy==1.23.5 scikit-image==0.24.0 opencv-python==4.9.0.80
+
+# Install DPVO runtime dependency (built from source for PyTorch nightly)
+RUN TORCH_CUDA_ARCH_LIST="12.0" FORCE_CUDA=1 pip install torch-scatter --no-build-isolation -v
+
+# Set working directory
+WORKDIR /code
+
+# Copy and install requirements (excluding mmcv, torch, numpy - we'll handle those separately)
+COPY requirements.txt /tmp/requirements.txt
+RUN grep -v -E "^(mmcv|torch|numpy|chumpy|setuptools)" /tmp/requirements.txt > /tmp/requirements_filtered.txt && \
+    pip install -r /tmp/requirements_filtered.txt
+
+# Install chumpy without build isolation
+RUN pip install chumpy --no-build-isolation
+
+# Install json_tricks (mmpose dependency)
+RUN pip install json_tricks
+
+# Build mmcv-full from source with CUDA 12.0 (sm_120) support
+# Following OpenMMLab's installation guide for custom CUDA versions
+RUN git clone -b v1.7.2 --depth 1 https://github.com/open-mmlab/mmcv.git /tmp/mmcv && \
+    cd /tmp/mmcv && \
+    TORCH_CUDA_ARCH_LIST="12.0" MMCV_WITH_OPS=1 FORCE_CUDA=1 \
+    pip install . --no-build-isolation -v && \
+    python -c "import mmcv; print('mmcv installed:', mmcv.__version__)" && \
+    cd / && rm -rf /tmp/mmcv
+
+# Copy third-party code
+COPY third-party /code/third-party
+
+# Build and install ViTPose
+WORKDIR /code/third-party/ViTPose
+RUN pip install -e .
+
+# Build and install DPVO with RTX 5090 support
+WORKDIR /code/third-party/DPVO
+RUN set -e; \
+        if [ ! -d thirdparty/eigen-3.4.0 ]; then \
+            wget -q https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.zip -O /tmp/eigen-3.4.0.zip; \
+    python -c "import os, zipfile; os.makedirs('thirdparty', exist_ok=True); zipfile.ZipFile('/tmp/eigen-3.4.0.zip').extractall('thirdparty')"; \
+    rm -f /tmp/eigen-3.4.0.zip; \
+        fi && \
+        TORCH_CUDA_ARCH_LIST="12.0" pip install . --no-build-isolation -v
+
+# Install pytorch3d for visualization (required by lib/vis/renderer.py)
+# Must build from source to match PyTorch nightly
+RUN pip install fvcore iopath && \
+    git clone https://github.com/facebookresearch/pytorch3d.git /tmp/pytorch3d && \
+    cd /tmp/pytorch3d && \
+    TORCH_CUDA_ARCH_LIST="12.0" MAX_JOBS=4 pip install . --no-build-isolation && \
+    cd / && rm -rf /tmp/pytorch3d
+
+# Reset working directory
+WORKDIR /code
+
+# Verify installation
+RUN python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA (torch): {torch.version.cuda}')" && \
+    python -c "import mmcv; print(f'mmcv: {mmcv.__version__}')" && \
+    python -c "import importlib.util as u; mods=['torch_scatter','dpvo','cuda_corr','cuda_ba','lietorch_backends']; missing=[m for m in mods if u.find_spec(m) is None]; assert not missing, f'Missing modules: {missing}'; print('DPVO modules present:', mods)"
+
+# Default command
+CMD ["/bin/bash"]
